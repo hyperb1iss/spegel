@@ -2,6 +2,7 @@ package routing
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
 
@@ -44,14 +45,9 @@ func TestP2PRouter(t *testing.T) {
 	ctx, cancel := context.WithCancel(ctx)
 	g, gCtx := errgroup.WithContext(ctx)
 
-	// Remove the 8 connection per IP limit.
-	routerOpts := []P2PRouterOption{
-		WithLibP2POptions(libp2p.ResourceManager(&network.NullResourceManager{})),
-	}
-
 	// Create primary router with no peer to bootstrap with.
 	primaryBs := NewStaticBootstrapper(nil)
-	primaryRouter, err := NewP2PRouter(t.Context(), "localhost:0", primaryBs, "9090", routerOpts...)
+	primaryRouter, err := NewP2PRouter(t.Context(), "localhost:0", primaryBs, "9090")
 	require.NoError(t, err)
 	g.Go(func() error {
 		return primaryRouter.Run(gCtx)
@@ -90,7 +86,7 @@ func TestP2PRouter(t *testing.T) {
 	routers := []*P2PRouter{}
 	for range 30 {
 		bs := NewStaticBootstrapper([]peer.AddrInfo{*host.InfoFromHost(primaryRouter.host)})
-		r, err := NewP2PRouter(t.Context(), "localhost:0", bs, "9091", routerOpts...)
+		r, err := NewP2PRouter(t.Context(), "localhost:0", bs, "9091")
 		require.NoError(t, err)
 		g.Go(func() error {
 			return r.Run(gCtx)
@@ -382,4 +378,22 @@ func TestLocalAddress(t *testing.T) {
 	ipAddrs, err := router.LocalAddresses()
 	require.NoError(t, err)
 	require.NotEmpty(t, ipAddrs)
+}
+
+func TestNewResourceManagerSharedSubnet(t *testing.T) {
+	t.Parallel()
+
+	rm, err := newResourceManager()
+	require.NoError(t, err)
+	defer rm.Close()
+
+	// Thirty peers in one IPv6 /56 connecting at once exceeds both of the
+	// go-libp2p defaults, 8 concurrent connections and a burst of 16 new ones.
+	for i := range 30 {
+		addr, err := ma.NewMultiaddr(fmt.Sprintf("/ip6/2001:db8:0:%x::1/tcp/5001", i))
+		require.NoError(t, err)
+		scope, err := rm.OpenConnection(network.DirInbound, false, addr)
+		require.NoError(t, err)
+		t.Cleanup(scope.Done)
+	}
 }
